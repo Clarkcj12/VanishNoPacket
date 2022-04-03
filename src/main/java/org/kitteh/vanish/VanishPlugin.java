@@ -1,123 +1,62 @@
+/*
+ * VanishNoPacket
+ * Copyright (C) 2011-2022 Matt Baxter
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package org.kitteh.vanish;
 
 import org.bukkit.ChatColor;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.server.PluginEnableEvent;
 import org.bukkit.metadata.LazyMetadataValue;
 import org.bukkit.metadata.LazyMetadataValue.CacheStrategy;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.json.simple.JSONArray;
-import org.json.simple.JSONObject;
-import org.json.simple.JSONValue;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.checkerframework.checker.nullness.qual.NonNull;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.kitteh.vanish.hooks.HookManager;
 import org.kitteh.vanish.hooks.HookManager.HookType;
 import org.kitteh.vanish.listeners.ListenEntity;
 import org.kitteh.vanish.listeners.ListenInventory;
+import org.kitteh.vanish.listeners.ListenPaper;
 import org.kitteh.vanish.listeners.ListenPlayerJoin;
 import org.kitteh.vanish.listeners.ListenPlayerMessages;
 import org.kitteh.vanish.listeners.ListenPlayerOther;
 import org.kitteh.vanish.listeners.ListenServerPing;
 import org.kitteh.vanish.listeners.ListenToYourHeart;
-import org.kitteh.vanish.listeners.TagAPIListener;
-import org.kitteh.vanish.metrics.MetricsOverlord;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLConnection;
 import java.util.HashSet;
+import java.util.Set;
 
-public final class VanishPlugin extends JavaPlugin {
-    final class UpdateCheck implements Runnable {
-        private static final String CREDITS = "This updater code is based on the great work of Gravity";
-
-        String getCredits() {
-            return CREDITS;
-        }
-
-        private final VanishPlugin plugin;
-
-        private UpdateCheck(VanishPlugin vanishPlugin) {
-            this.plugin = vanishPlugin;
-        }
-
-        @Override
-        public void run() {
-            final File pluginsFolder = this.plugin.getDataFolder().getParentFile();
-            final File updaterFolder = new File(pluginsFolder, "Updater");
-            final File updaterConfigFile = new File(updaterFolder, "config.yml");
-            String apiKey = null;
-            String latest = null;
-
-            if (updaterFolder.exists()) {
-                if (updaterConfigFile.exists()) {
-                    final YamlConfiguration config = YamlConfiguration.loadConfiguration(updaterConfigFile);
-                    apiKey = config.getString("api-key");
-                }
-            }
-
-            URL url;
-            try {
-                url = new URL("https://api.curseforge.com/servermods/files?projectIds=30949");
-            } catch (final MalformedURLException e) {
-                return;
-            }
-
-            URLConnection conn;
-            IOException exceptional = null;
-            try {
-                conn = url.openConnection();
-
-                conn.setConnectTimeout(5000);
-                if (apiKey != null) {
-                    conn.addRequestProperty("X-API-Key", apiKey);
-                }
-                conn.addRequestProperty("User-Agent", "KittehUpdater (by mbaxter)");
-                conn.setDoOutput(true);
-
-                final BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                final String response = reader.readLine();
-
-                final JSONArray array = (JSONArray) JSONValue.parse(response);
-                if (array.size() == 0) {
-                    return;
-                }
-
-                latest = (String) ((JSONObject) array.get(array.size() - 1)).get("name");
-            } catch (final IOException e) {
-                exceptional = e;
-            }
-            if (latest != null) {
-                this.plugin.latestVersion = latest;
-                if (!("v" + this.plugin.getCurrentVersion()).equals(latest)) {
-                    this.plugin.getLogger().info("Found a different version available: " + latest);
-                    this.plugin.getLogger().info("Check http://www.curse.com/server-mods/minecraft/vanish");
-                    this.plugin.versionDiff = true;
-                }
-            } else {
-                this.plugin.getLogger().info("Error: Could not check if plugin was up to date. Will try later");
-                if (exceptional != null) {
-                    this.plugin.getLogger().info("Exception message: " + exceptional.getMessage());
-                }
-            }
-        }
-    }
-
-    private final HashSet<String> haveInventoriesOpen = new HashSet<String>();
-    private String latestVersion = null;
-    private boolean versionDiff = false;
-    private VanishManager manager;
+public final class VanishPlugin extends JavaPlugin implements Listener {
+    private final Set<String> haveInventoriesOpen = new HashSet<>();
     private final HookManager hookManager = new HookManager(this);
+    private VanishManager manager;
+    private boolean paper;
 
     /**
      * Informs VNP that a user has closed their fake chest
      *
      * @param name user's name
      */
-    public void chestFakeClose(String name) {
+    public void chestFakeClose(@NonNull String name) {
         synchronized (this.haveInventoriesOpen) {
             this.haveInventoriesOpen.remove(name);
         }
@@ -129,7 +68,7 @@ public final class VanishPlugin extends JavaPlugin {
      * @param name the user's name
      * @return true if currently using a fake chest
      */
-    public boolean chestFakeInUse(String name) {
+    public boolean chestFakeInUse(@NonNull String name) {
         synchronized (this.haveInventoriesOpen) {
             return this.haveInventoriesOpen.contains(name);
         }
@@ -140,7 +79,7 @@ public final class VanishPlugin extends JavaPlugin {
      *
      * @param name user's name
      */
-    public void chestFakeOpen(String name) {
+    public void chestFakeOpen(@NonNull String name) {
         synchronized (this.haveInventoriesOpen) {
             this.haveInventoriesOpen.add(name);
         }
@@ -151,7 +90,7 @@ public final class VanishPlugin extends JavaPlugin {
      *
      * @return version of VanishNoPacket in use
      */
-    public String getCurrentVersion() {
+    public @NonNull String getCurrentVersion() {
         return this.getDescription().getVersion();
     }
 
@@ -160,18 +99,8 @@ public final class VanishPlugin extends JavaPlugin {
      *
      * @return the hook manager
      */
-    public HookManager getHookManager() {
+    public @NonNull HookManager getHookManager() {
         return this.hookManager;
-    }
-
-    /**
-     * Gets the latest found version
-     * Will show this version, if update checks are disabled
-     *
-     * @return the latest found version of VanishNoPacket
-     */
-    public String getLatestKnownVersion() {
-        return this.latestVersion;
     }
 
     /**
@@ -179,7 +108,7 @@ public final class VanishPlugin extends JavaPlugin {
      *
      * @return the VanishManager
      */
-    public VanishManager getManager() {
+    public @NonNull VanishManager getManager() {
         return this.manager;
     }
 
@@ -189,7 +118,7 @@ public final class VanishPlugin extends JavaPlugin {
      *
      * @param player player who has joined the server
      */
-    public void hooksJoin(Player player) {
+    public void hooksJoin(@NonNull Player player) {
         this.hookManager.onJoin(player);
     }
 
@@ -199,47 +128,67 @@ public final class VanishPlugin extends JavaPlugin {
      *
      * @param player player who has left the server
      */
-    public void hooksQuit(Player player) {
+    public void hooksQuit(@NonNull Player player) {
         this.hookManager.onQuit(player);
         this.hookManager.onUnvanish(player);
     }
 
     /**
-     * Calls hooks for when a player has unvanished
+     * Calls hooks for when a player has unvanished.
      * Internal use only please
      *
      * @param player the un-vanishing user
      */
-    public void hooksUnvanish(Player player) {
+    public void hooksUnvanish(@NonNull Player player) {
         this.hookManager.onUnvanish(player);
     }
 
     /**
-     * Calls hooks for when player has vanished
+     * Calls hooks for when player has vanished.
      * Internal use only please.
      *
      * @param player the vanishing player
      */
-    public void hooksVanish(Player player) {
+    public void hooksVanish(@NonNull Player player) {
         this.hookManager.onVanish(player);
     }
 
     /**
-     * Sends a message to all players with vanish.statusupdates permission
+     * Calls hooks for when player has sent a fake join message.
+     * Internal use only please.
+     *
+     * @param player the fake joining player
+     */
+    public void hooksFakeJoin(@NonNull Player player) {
+        this.hookManager.onFakeJoin(player);
+    }
+
+    /**
+     * Calls hooks for when player has sent a fake quit message.
+     * Internal use only please.
+     *
+     * @param player the fake quitting player
+     */
+    public void hooksFakeQuit(@NonNull Player player) {
+        this.hookManager.onFakeQuit(player);
+    }
+
+    /**
+     * Sends a message to all players with vanish.statusupdates permission.
      *
      * @param message the message to send
      */
-    public void messageStatusUpdate(String message) {
+    public void messageStatusUpdate(@NonNull String message) {
         this.messageStatusUpdate(message, null);
     }
 
     /**
-     * Sends a message to all players with vanish.statusupdates but one
+     * Sends a message to all players with vanish.statusupdates but one.
      *
      * @param message the message to send
      * @param avoid player to not send the message to
      */
-    public void messageStatusUpdate(String message, Player avoid) {
+    public void messageStatusUpdate(@NonNull String message, @Nullable Player avoid) {
         for (final Player player : this.getServer().getOnlinePlayers()) {
             if ((player != null) && !player.equals(avoid) && VanishPerms.canSeeStatusUpdates(player)) {
                 player.sendMessage(message);
@@ -267,10 +216,47 @@ public final class VanishPlugin extends JavaPlugin {
     public void onEnable() {
         this.setInstance(this);
 
+        // Thanks, PaperLib
+        // https://github.com/PaperMC/PaperLib
+        try {
+            Class.forName("com.destroystokyo.paper.PaperConfig");
+            this.getServer().getPluginManager().registerEvents(new ListenPaper(this), this);
+            this.paper = true;
+            new BukkitRunnable() {
+                @SuppressWarnings("deprecation")
+                @Override
+                public void run() {
+                    if (AsyncPlayerChatEvent.getHandlerList().getRegisteredListeners().length == 1) {
+                        AsyncPlayerChatEvent.getHandlerList().unregister((Plugin) VanishPlugin.this);
+                    }
+                }
+            }.runTaskLater(this, 1);
+        } catch (ClassNotFoundException ignored) {
+            final String benefitsProperty = "paperlib.shown-benefits";
+            this.getLogger().warning("====================================================");
+            this.getLogger().warning(" VanishNoPacket works better if you use Paper ");
+            this.getLogger().warning(" as your server software. ");
+            if (System.getProperty(benefitsProperty) == null) {
+                System.setProperty(benefitsProperty, "1");
+                this.getLogger().warning("  ");
+                this.getLogger().warning(" Paper offers significant performance improvements,");
+                this.getLogger().warning(" bug fixes, security enhancements and optional");
+                this.getLogger().warning(" features for server owners to enhance their server.");
+                this.getLogger().warning("  ");
+                this.getLogger().warning(" Paper includes Timings v2, which is significantly");
+                this.getLogger().warning(" better at diagnosing lag problems over v1.");
+                this.getLogger().warning("  ");
+                this.getLogger().warning(" All of your plugins should still work, and the");
+                this.getLogger().warning(" Paper community will gladly help you fix any issues.");
+                this.getLogger().warning("  ");
+                this.getLogger().warning(" Join the Paper Community @ https://papermc.io");
+            }
+            this.getLogger().warning("====================================================");
+        }
+
         final File check = new File(this.getDataFolder(), "config.yml");
         boolean firstTimeStarting = false;
         if (!check.exists()) {
-            firstTimeStarting = true;
             this.saveDefaultConfig();
             this.reloadConfig();
             if (this.getServer().getPluginManager().isPluginEnabled("Essentials")) {
@@ -282,51 +268,21 @@ public final class VanishPlugin extends JavaPlugin {
 
         Settings.freshStart(this);
 
-        dance:
-        if (this.getConfig().getBoolean("colornametags", true)) {
-            if (this.getServer().getPluginManager().isPluginEnabled("TagAPI")) {
-                try {
-                    Class.forName("org.kitteh.tag.AsyncPlayerReceiveNameTagEvent");
-                } catch (final ClassNotFoundException e) {
-                    this.getLogger().warning("Update to TagAPI 3.0 or later to use name coloring");
-                    break dance;
-                }
-                this.getServer().getPluginManager().registerEvents(new TagAPIListener(this), this);
-                this.getLogger().info("Using color changing features of TagAPI.");
-            } else {
-                this.getLogger().info("Colored nametags enabled, but I couldn't find TagAPI");
-                this.getLogger().info("For awesome colored nametags on vanish, visit");
-                this.getLogger().info("http://dev.bukkit.org/server-mods/tag/ ");
-                this.getLogger().info("and download TagAPI.jar");
-            }
-        }
-
         if (this.getConfig().getBoolean("hooks.essentials", false)) {
             this.hookManager.getHook(HookType.Essentials).onEnable();
         }
-        this.hookManager.getHook(HookType.GeoIPTools).onEnable();
         if (this.getConfig().getBoolean("hooks.dynmap", false)) {
             this.hookManager.getHook(HookType.Dynmap).onEnable();
         }
-        //if (this.getServer().getPluginManager().getPlugin("ProtocolLib") != null) {
-        //    this.hookManager.getHook(HookType.ProtocolLib).onEnable();
-        //}
+        if (this.getConfig().getBoolean("hooks.discordsrv", false) && this.getServer().getPluginManager().isPluginEnabled("DiscordSRV")) {
+            // Shouldn't happen here, but if the load order gets broken...
+            this.hookManager.getHook(HookType.DiscordSRV).onEnable();
+        }
+        if (this.getConfig().getBoolean("hooks.squaremap", false)) {
+            this.hookManager.getHook(HookType.squaremap).onEnable();
+        }
 
         final VanishPlugin self = this;
-        //Post-load stuff
-        this.getServer().getScheduler().scheduleSyncDelayedTask(this, new Runnable() {
-            @Override
-            public void run() {
-                if (VanishPlugin.this.getConfig().getBoolean("hooks.JSONAPI", false)) {
-                    VanishPlugin.this.hookManager.getHook(HookType.JSONAPI).onEnable();
-                }
-                MetricsOverlord.init(self);
-            }
-        }, 1);
-
-        if (this.getConfig().getBoolean("hooks.spoutcraft", false)) {
-            this.hookManager.getHook(HookType.SpoutCraft).onEnable();
-        }
 
         this.manager = new VanishManager(this);
 
@@ -334,25 +290,8 @@ public final class VanishPlugin extends JavaPlugin {
             player.setMetadata("vanished", new LazyMetadataValue(this, CacheStrategy.NEVER_CACHE, new VanishCheck(this.manager, player.getName())));
         }
 
-        boolean updateCheck = this.getConfig().getBoolean("checkupdates", true);
-        if (firstTimeStarting) {
-            updateCheck = false;
-            this.getLogger().info("This is your first startup (or you wiped your config).");
-            this.getLogger().info("In future startups, VanishNoPacket will check for updates");
-            this.getLogger().info("If you dislike it, disable 'checkupdates' in the config file");
-            this.getLogger().info("Note that this plugin also utilizes PluginMetrics with usage tracking");
-            this.getLogger().info("If you do not want usage tracking (paranoid) disable in that config");
-        }
-
-        if (updateCheck) {
-            if (this.getCurrentVersion().contains("SNAPSHOT") || this.getCurrentVersion().equals("${project.version}") || this.getCurrentVersion().endsWith("unofficial")) {
-                this.getLogger().info("Not a release version. Update check disabled");
-            } else {
-                this.getServer().getScheduler().runTaskTimerAsynchronously(this, new UpdateCheck(this), 40, 432000);
-            }
-        }
-
         this.getCommand("vanish").setExecutor(new VanishCommand(this));
+        this.getServer().getPluginManager().registerEvents(this, this);
         this.getServer().getPluginManager().registerEvents(new ListenEntity(this), this);
         this.getServer().getPluginManager().registerEvents(new ListenPlayerMessages(this), this);
         this.getServer().getPluginManager().registerEvents(new ListenPlayerJoin(this), this);
@@ -364,8 +303,15 @@ public final class VanishPlugin extends JavaPlugin {
         this.getLogger().info(this.getCurrentVersion() + " loaded.");
     }
 
+    @EventHandler
+    public void onPluginEnable(PluginEnableEvent event) {
+        if (event.getPlugin().getName().equalsIgnoreCase("DiscordSRV") && this.getConfig().getBoolean("hooks.discordsrv", false)) {
+            this.hookManager.getHook(HookType.DiscordSRV).onEnable();
+        }
+    }
+
     /**
-     * Reloads the VNP config
+     * Reloads the VNP config.
      */
     public void reload() {
         this.reloadConfig();
@@ -373,17 +319,16 @@ public final class VanishPlugin extends JavaPlugin {
     }
 
     /**
-     * Gets if there is a difference in versions between this and latest
-     * Will always be false if update checks are disabled
+     * Gets if Paper is present.
      *
-     * @return whether or not there's a new version available
+     * @return true if Paper is present
      */
-    public boolean versionDifference() {
-        return this.versionDiff;
+    public boolean isPaper() {
+        return this.paper;
     }
 
     @SuppressWarnings("deprecation")
-    private void setInstance(VanishPlugin plugin) {
+    private void setInstance(@Nullable VanishPlugin plugin) {
         org.kitteh.vanish.staticaccess.VanishNoPacket.setInstance(plugin);
     }
 }
